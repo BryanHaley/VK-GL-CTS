@@ -28,10 +28,34 @@
 #include "glwFunctions.hpp"
 #include "tcuTestLog.hpp"
 
+#include <cstdlib>
+
 namespace deqp
 {
 
 using tcu::TestLog;
+
+// Bring-up escape hatch: when GLCTS_TOLERATE_STATE_RESET_ERRORS=1 a failing
+// glu::resetState is logged and the run keeps going instead of terminating.
+// One broken enum would otherwise stop the whole suite after the first test.
+// Off by default, so conformance runs behave exactly as upstream.
+static bool tolerateStateResetErrors(void)
+{
+    static const bool s_tolerate = []() {
+        const char *env = getenv("GLCTS_TOLERATE_STATE_RESET_ERRORS");
+        return env && env[0] == '1';
+    }();
+
+    return s_tolerate;
+}
+
+static void drainGLErrors(Context &context)
+{
+    const glw::Functions &gl = context.getRenderContext().getFunctions();
+
+    for (int i = 0; i < 64 && gl.getError() != GL_NO_ERROR; i++)
+        ;
+}
 
 TestCaseWrapper::TestCaseWrapper(Context &context) : m_testCtx(context.getTestContext()), m_context(context)
 {
@@ -54,8 +78,15 @@ bool TestCaseWrapper::initTestCase(tcu::TestCase *testCase)
     catch (const std::exception &e)
     {
         log << e;
-        log << TestLog::Message << "Error in state reset, test program will terminate." << TestLog::EndMessage;
-        return false;
+
+        if (!tolerateStateResetErrors())
+        {
+            log << TestLog::Message << "Error in state reset, test program will terminate." << TestLog::EndMessage;
+            return false;
+        }
+
+        log << TestLog::Message << "Error in state reset, continuing anyway." << TestLog::EndMessage;
+        drainGLErrors(m_context);
     }
 
     try
@@ -113,8 +144,15 @@ bool TestCaseWrapper::deinitTestCase(tcu::TestCase *testCase)
     catch (const tcu::Exception &e)
     {
         log << e;
-        log << TestLog::Message << "Error in test case deinit, test program will terminate." << TestLog::EndMessage;
-        return false;
+
+        if (!tolerateStateResetErrors())
+        {
+            log << TestLog::Message << "Error in test case deinit, test program will terminate." << TestLog::EndMessage;
+            return false;
+        }
+
+        log << TestLog::Message << "Error in test case deinit, continuing anyway." << TestLog::EndMessage;
+        drainGLErrors(m_context);
     }
 
     try
@@ -125,8 +163,15 @@ bool TestCaseWrapper::deinitTestCase(tcu::TestCase *testCase)
     catch (const std::exception &e)
     {
         log << e;
-        log << TestLog::Message << "Error in state reset, test program will terminate." << TestLog::EndMessage;
-        return false;
+
+        if (!tolerateStateResetErrors())
+        {
+            log << TestLog::Message << "Error in state reset, test program will terminate." << TestLog::EndMessage;
+            return false;
+        }
+
+        log << TestLog::Message << "Error in state reset, continuing anyway." << TestLog::EndMessage;
+        drainGLErrors(m_context);
     }
 
     return true;

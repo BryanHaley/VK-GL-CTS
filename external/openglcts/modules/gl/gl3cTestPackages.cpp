@@ -74,6 +74,20 @@
 namespace gl3cts
 {
 
+// Bring-up escape hatch: when GLCTS_TOLERATE_STATE_RESET_ERRORS=1 a failing
+// deinit or glu::resetState is swallowed so the run keeps going. One broken
+// enum would otherwise stop the whole suite after the first test. Off by
+// default, so conformance runs behave exactly as upstream.
+static bool tolerateStateResetErrors(void)
+{
+    static const bool s_tolerate = []() {
+        const char *env = getenv("GLCTS_TOLERATE_STATE_RESET_ERRORS");
+        return env && env[0] == '1';
+    }();
+
+    return s_tolerate;
+}
+
 TestCaseWrapper::TestCaseWrapper(deqp::TestPackage &package, de::SharedPtr<tcu::WaiverUtil> waiverMechanism)
     : m_testPackage(package)
     , m_waiverMechanism(waiverMechanism)
@@ -94,10 +108,42 @@ void TestCaseWrapper::init(tcu::TestCase *testCase, const std::string &path)
 
 void TestCaseWrapper::deinit(tcu::TestCase *testCase)
 {
-    testCase->deinit();
-
     deqp::Context &context = m_testPackage.getContext();
-    glu::resetState(context.getRenderContext(), context.getContextInfo());
+
+    if (!tolerateStateResetErrors())
+    {
+        testCase->deinit();
+        glu::resetState(context.getRenderContext(), context.getContextInfo());
+        return;
+    }
+
+    try
+    {
+        testCase->deinit();
+    }
+    catch (const std::exception &e)
+    {
+        m_testPackage.getTestContext().getLog()
+            << tcu::TestLog::Message << "Error in test case deinit, continuing anyway: " << e.what()
+            << tcu::TestLog::EndMessage;
+    }
+
+    try
+    {
+        glu::resetState(context.getRenderContext(), context.getContextInfo());
+    }
+    catch (const std::exception &e)
+    {
+        m_testPackage.getTestContext().getLog() << tcu::TestLog::Message
+                                                << "Error in state reset, continuing anyway: " << e.what()
+                                                << tcu::TestLog::EndMessage;
+    }
+
+    // resetState may have bailed out part way through; start the next test with a clean error queue
+    const glw::Functions &gl = context.getRenderContext().getFunctions();
+
+    for (int i = 0; i < 64 && gl.getError() != GL_NO_ERROR; i++)
+        ;
 }
 
 tcu::TestNode::IterateResult TestCaseWrapper::iterate(tcu::TestCase *testCase)
