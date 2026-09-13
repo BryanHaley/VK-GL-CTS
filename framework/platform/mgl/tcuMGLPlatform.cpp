@@ -60,7 +60,7 @@ const char *getMGLLibraryPath(void)
 class MGLFunctionLoader : public glw::FunctionLoader
 {
 public:
-    MGLFunctionLoader(const char *path) : m_library(path)
+    MGLFunctionLoader(de::DynamicLibrary &library) : m_library(library)
     {
     }
 
@@ -70,7 +70,7 @@ public:
     }
 
 private:
-    de::DynamicLibrary m_library;
+    de::DynamicLibrary &m_library;
 };
 
 glu::ApiType queryVersion(const glw::Functions &gl)
@@ -95,8 +95,10 @@ public:
         if (config.type.getAPI().getProfile() != glu::PROFILE_CORE)
             throw NotSupportedError("MGL only exposes the core profile");
 
+        m_library = new de::DynamicLibrary(getMGLLibraryPath());
+
         {
-            MGLFunctionLoader loader(getMGLLibraryPath());
+            MGLFunctionLoader loader(*m_library);
             glu::initFunctions(&m_functions, &loader, config.type.getAPI());
         }
 
@@ -113,6 +115,14 @@ public:
 
     ~MGLRenderContext(void)
     {
+        delete m_library;
+    }
+
+    // Tests that reach for an entry point by name rather than through the
+    // function table need this; without it they get a null pointer and throw.
+    glw::GenericFuncType getProcAddress(const char *name) const
+    {
+        return m_library ? m_library->getFunction(name) : nullptr;
     }
 
     glu::ContextType getType(void) const
@@ -135,6 +145,7 @@ private:
     const glu::ContextType m_type;
     glw::Functions m_functions;
     RenderTarget m_renderTarget;
+    de::DynamicLibrary *m_library = nullptr;
 };
 
 class MGLContextFactory : public glu::ContextFactory
