@@ -2,7 +2,7 @@
  * drawElements Quality Program Tester Core -- MGL platform port
  * -------------------------------------------------------------
  *
- * Copyright (C) The Moogle Project
+ * Copyright (C) The MooGL Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@
  *
  *//*!
  * \file
- * \brief macOS platform that runs the CTS against MGL (libmoogle.dylib).
+ * \brief macOS platform that runs the CTS against MGL (libmoogl.dylib).
  *
  * MGL publishes the GL 4.6 core entry points as plain C symbols and builds
  * itself a headless Metal context the moment the dylib is loaded, so there is
@@ -42,7 +42,7 @@
 #include <string>
 
 #ifndef MGL_DEFAULT_LIBRARY_PATH
-#define MGL_DEFAULT_LIBRARY_PATH "/Users/bryan/Projects/MGL/build/libmoogle.dylib"
+#define MGL_DEFAULT_LIBRARY_PATH "/Users/bryan/Projects/MGL/build/libmoogl.dylib"
 #endif
 
 namespace tcu
@@ -103,7 +103,7 @@ public:
         }
 
         if (!m_functions.getIntegerv || !m_functions.getError)
-            throw ResourceError("libmoogle.dylib did not provide the basic GL entry points");
+            throw ResourceError("libmoogl.dylib did not provide the basic GL entry points");
 
         {
             const glu::ApiType actualApi = queryVersion(m_functions);
