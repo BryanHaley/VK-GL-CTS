@@ -22,7 +22,8 @@
  *
  * MGL publishes the GL 4.6 core entry points as plain C symbols and builds
  * itself a headless Metal context the moment the dylib is loaded, so there is
- * no CGL/WGL/EGL step here: loading the library IS creating the context.
+ * no CGL/WGL/EGL step here: loading the library IS creating the context. An
+ * OpenGL ES package asks libmoogl for an ES context of its own instead.
  *//*--------------------------------------------------------------------*/
 
 #include "tcuPlatform.hpp"
@@ -73,7 +74,7 @@ private:
     de::DynamicLibrary &m_library;
 };
 
-glu::ApiType queryVersion(const glw::Functions &gl)
+glu::ApiType queryVersion(const glw::Functions &gl, bool es)
 {
     int major = 0;
     int minor = 0;
@@ -82,20 +83,61 @@ glu::ApiType queryVersion(const glw::Functions &gl)
     gl.getIntegerv(GL_MINOR_VERSION, &minor);
     GLU_EXPECT_NO_ERROR(gl.getError(), "Failed to query exact GL version");
 
-    return glu::ApiType::core(major, minor);
+    return es ? glu::ApiType::es(major, minor) : glu::ApiType::core(major, minor);
 }
+
+// libmoogl's context calls, from MGLContext.h
+typedef void *(*CreateContextFunc)(unsigned, unsigned, unsigned, unsigned, unsigned, unsigned, void *, unsigned);
+typedef void (*ContextFunc)(void *);
+typedef void *(*GetContextFunc)(void);
+typedef void *(*RendererFunc)(void *, int, int);
+
+const unsigned MGL_CONTEXT_ES_PROFILE_BIT = 0x4;
 
 class MGLRenderContext : public glu::RenderContext
 {
 public:
-    MGLRenderContext(const glu::RenderConfig &config)
+    MGLRenderContext(const glu::RenderConfig &config, const tcu::CommandLine &cmdLine,
+                     const MGLRenderContext *shared = nullptr)
         : m_type(config.type)
         , m_renderTarget(0, 0, tcu::PixelFormat(0, 0, 0, 0), 0, 0, 0)
     {
-        if (config.type.getAPI().getProfile() != glu::PROFILE_CORE)
-            throw NotSupportedError("MGL only exposes the core profile");
+        const bool es = config.type.getAPI().getProfile() == glu::PROFILE_ES;
+
+        if (config.type.getAPI().getProfile() != glu::PROFILE_CORE && !es)
+            throw NotSupportedError("MGL makes core and ES contexts");
 
         m_library = new de::DynamicLibrary(getMGLLibraryPath());
+
+        if (es)
+        {
+            CreateContextFunc create = (CreateContextFunc)m_library->getFunction("createGLMContextProfile");
+            ContextFunc setCurrent   = (ContextFunc)m_library->getFunction("MGLsetCurrentContext");
+            GetContextFunc current   = (GetContextFunc)m_library->getFunction("MGLgetCurrentContext");
+            RendererFunc renderer    = (RendererFunc)m_library->getFunction("CppCreateMGLRendererHeadlessSize");
+
+            m_destroy = (ContextFunc)m_library->getFunction("destroyGLMContext");
+            m_setCurrent = setCurrent;
+
+            if (!create || !setCurrent || !current || !renderer || !m_destroy)
+                throw ResourceError("libmoogl.dylib has no ES context calls");
+
+            m_previous = current();
+            m_context  = create(GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, GL_DEPTH_COMPONENT, GL_FLOAT, GL_STENCIL_INDEX8,
+                                GL_UNSIGNED_BYTE, shared ? shared->m_context : nullptr, MGL_CONTEXT_ES_PROFILE_BIT);
+            if (!m_context)
+                throw NotSupportedError("libmoogl.dylib makes no ES contexts; build it with OGL_ES=1");
+
+            // the default framebuffer, at the size the run asks for
+            const int width  = config.width != glu::RenderConfig::DONT_CARE ? config.width :
+                               cmdLine.getSurfaceWidth() > 0 ? cmdLine.getSurfaceWidth() : 256;
+            const int height = config.height != glu::RenderConfig::DONT_CARE ? config.height :
+                               cmdLine.getSurfaceHeight() > 0 ? cmdLine.getSurfaceHeight() : 256;
+
+            setCurrent(m_context);
+            renderer(m_context, width, height);
+            m_renderTarget = RenderTarget(width, height, tcu::PixelFormat(8, 8, 8, 8), 24, 8, 0);
+        }
 
         {
             MGLFunctionLoader loader(*m_library);
@@ -106,7 +148,7 @@ public:
             throw ResourceError("libmoogl.dylib did not provide the basic GL entry points");
 
         {
-            const glu::ApiType actualApi = queryVersion(m_functions);
+            const glu::ApiType actualApi = queryVersion(m_functions, es);
 
             if (!contextSupports(glu::ContextType(actualApi, glu::ContextFlags(0)), config.type.getAPI()))
                 throw NotSupportedError("MGL does not support the requested OpenGL version");
@@ -115,6 +157,12 @@ public:
 
     ~MGLRenderContext(void)
     {
+        if (m_context)
+        {
+            m_setCurrent(m_previous);
+            m_destroy(m_context);
+        }
+
         delete m_library;
     }
 
@@ -141,11 +189,23 @@ public:
     {
     }
 
+    void makeCurrent(void)
+    {
+        if (!m_context)
+            throw NotSupportedError("only an ES context can be made current again");
+
+        m_setCurrent(m_context);
+    }
+
 private:
     const glu::ContextType m_type;
     glw::Functions m_functions;
     RenderTarget m_renderTarget;
     de::DynamicLibrary *m_library = nullptr;
+    void *m_context               = nullptr;
+    void *m_previous              = nullptr;
+    ContextFunc m_setCurrent      = nullptr;
+    ContextFunc m_destroy         = nullptr;
 };
 
 class MGLContextFactory : public glu::ContextFactory
@@ -155,10 +215,10 @@ public:
     {
     }
 
-    glu::RenderContext *createContext(const glu::RenderConfig &config, const tcu::CommandLine &,
-                                      const glu::RenderContext *) const
+    glu::RenderContext *createContext(const glu::RenderConfig &config, const tcu::CommandLine &cmdLine,
+                                      const glu::RenderContext *shared) const
     {
-        return new MGLRenderContext(config);
+        return new MGLRenderContext(config, cmdLine, dynamic_cast<const MGLRenderContext *>(shared));
     }
 };
 

@@ -772,10 +772,12 @@ bool AtomicCounterTest::checkPath(const vector<uint32_t> &increments, const vect
     minValue = std::min(minValue, (uint32_t)initialValue);
     maxValue = std::max(maxValue, (uint32_t)initialValue);
 
-    auto size = maxValue - minValue + 1;
-    if (size > 5000)
+    // N calls can move the counter N steps, so N + 1 values is the widest legal spread
+    const uint32_t maxSize = spec.threadCount * spec.callCount + 1;
+    auto size              = maxValue - minValue + 1;
+    if (size > maxSize)
     {
-        log << TestLog::Message << "Test failed. Size is bigger than 5000 (" << size
+        log << TestLog::Message << "Test failed. Size is bigger than " << maxSize << " (" << size
             << ") what means driver implementation bug." << TestLog::EndMessage;
         return false;
     }
